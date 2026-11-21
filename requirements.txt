@@ -1,4 +1,0 @@
-streamlit
-selenium
-reportlab
-tzdata
