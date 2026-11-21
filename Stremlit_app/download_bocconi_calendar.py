@@ -15,7 +15,9 @@ link can be replaced with a newer share link if the university changes it.
 """
 
 import argparse
+import os
 import re
+import shutil
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -35,6 +37,18 @@ PUBLIC_CALENDAR_URL = (
 )
 LOCAL_TZ = ZoneInfo("Asia/Calcutta")
 LOCAL_TZ_LABEL = "Asia/Calcutta"
+
+
+def _find_executable(*names: str, extra: tuple[str, ...] = ()) -> str | None:
+    """Return the first existing executable among PATH names and fixed paths."""
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    for path in extra:
+        if Path(path).is_file() and os.access(path, os.X_OK):
+            return path
+    return None
 
 
 def _clean_summary(value: str) -> str:
@@ -107,15 +121,26 @@ def capture_visible_events(day: date, headless: bool = True) -> list[dict[str, s
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
-    service = None
-    for chrome_bin, driver_bin in (("/usr/bin/chromium", "/usr/bin/chromedriver"),
-                                   ("/usr/bin/chromium-browser", "/usr/bin/chromedriver")):
-        if Path(chrome_bin).exists() and Path(driver_bin).exists():
-            options.binary_location = chrome_bin
-            service = Service(driver_bin)
-            break
-    driver = (webdriver.Chrome(service=service, options=options) if service
-              else webdriver.Chrome(options=options))
+    chrome_bin = _find_executable(
+        "chromium", "chromium-browser", "google-chrome", "google-chrome-stable",
+        extra=("/usr/bin/chromium", "/usr/lib/chromium/chromium",
+               "/usr/bin/chromium-browser", "/snap/bin/chromium"))
+    driver_bin = _find_executable(
+        "chromedriver",
+        extra=("/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver",
+               "/usr/lib/chromium-browser/chromedriver"))
+    if sys.platform.startswith("linux") and chrome_bin and driver_bin:
+        # Use the system Chromium + matching driver (installed via packages.txt)
+        # so Selenium doesn't download a driver that can't run on the server.
+        options.binary_location = chrome_bin
+        driver = webdriver.Chrome(service=Service(driver_bin), options=options)
+    elif sys.platform.startswith("linux") and Path("/home/appuser").exists():
+        raise RuntimeError(
+            f"Found browser={chrome_bin!r}, driver={driver_bin!r}. Both are needed: "
+            "make sure packages.txt (with 'chromium' and 'chromium-driver') is in "
+            "the repo's top folder, then reboot the app.")
+    else:
+        driver = webdriver.Chrome(options=options)
     try:
         wait = WebDriverWait(driver, 40)
         driver.get(PUBLIC_CALENDAR_URL)
